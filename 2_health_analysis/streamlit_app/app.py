@@ -6,33 +6,15 @@ load_dotenv()
 
 st.set_page_config(page_title="Blood Work Analyzer", layout="wide")
 
-llm = ChatGoogleGenerativeAI(model="gemma-4-31b-it")
-
-st.markdown("""
-<style>
-.scroll-box {
-    height: 230px;
-    overflow-y: auto;
-    padding: 12px 16px;
-    border: 1px solid #333;
-    border-radius: 8px;
-    background-color: #1e1e1e;
-    font-size: 0.9rem;
-    line-height: 1.6;
-}
-.scroll-box p, .scroll-box li {
-    color: #e0e0e0;
-}
-.section-label {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin-bottom: 6px;
-    color: #ffffff;
-}
-</style>
-""", unsafe_allow_html=True)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
 st.title("Blood Work Analyzer")
+
+# Initialize session state for persistence across reruns
+if "health_summary" not in st.session_state:
+    st.session_state.health_summary = ""
+if "diet_plan" not in st.session_state:
+    st.session_state.diet_plan = ""
 
 left_col, right_col = st.columns([1, 1])
 
@@ -48,21 +30,21 @@ with left_col:
 
 with right_col:
     st.subheader("Health Summary")
-    health_box = st.empty()
-    health_box.markdown('<div class="scroll-box"></div>', unsafe_allow_html=True)
+    health_container = st.container(height=230)
+    if st.session_state.health_summary:
+        health_container.markdown(st.session_state.health_summary)
 
     st.subheader("Suggested Diet Plan")
-    diet_box = st.empty()
-    diet_box.markdown('<div class="scroll-box"></div>', unsafe_allow_html=True)
+    diet_container = st.container(height=250)
+    if st.session_state.diet_plan:
+        diet_container.markdown(st.session_state.diet_plan)
 
 if analyze_clicked:
     if not blood_report.strip():
-        with left_col:
-            st.warning("Please paste a blood work report before analyzing.")
+        st.warning("Please paste a blood work report before analyzing.")
     else:
         with st.spinner("Analyzing your blood work..."):
-
-            # Stage 1: Extract and flag abnormal values
+            # Stage 1: Extract values
             extraction_prompt = f"""
 You are a medical data extraction assistant.
 
@@ -76,18 +58,20 @@ Blood Report:
 {blood_report}
 """
             extraction_response = llm.invoke(extraction_prompt)
-            extracted_values = extraction_response.text
+            extracted_values = str(extraction_response.content)
 
             # Stage 2: Health summary and Indian diet plan
             diet_prompt = f"""
 You are a clinical nutritionist specializing in Indian dietary habits.
 
-Based on the blood work analysis below, provide two clearly separated sections:
+Based on the blood work analysis below, provide two clearly separated sections using the exact delimiter [SPLIT_HERE]:
 
-SECTION 1 - HEALTH SUMMARY:
+SECTION 1:
 Write 4-5 lines explaining the patient's condition in simple, non-technical language.
 
-SECTION 2 - INDIAN DIET PLAN:
+[SPLIT_HERE]
+
+SECTION 2:
 List foods to eat more of and foods to avoid, using commonly available Indian foods
 like dal, sabzi, roti, rice, etc. Keep it practical and concise.
 
@@ -95,23 +79,15 @@ Blood Work Analysis:
 {extracted_values}
 """
             diet_response = llm.invoke(diet_prompt)
-            full_response = diet_response.text
+            full_response = str(diet_response.content)
 
-        # Split response into two sections
-        if "SECTION 2" in full_response:
-            parts = full_response.split("SECTION 2")
-            health_summary = parts[0].replace("SECTION 1 - HEALTH SUMMARY:", "").replace("SECTION 1", "").strip()
-            diet_plan = ("SECTION 2" + parts[1]).replace("SECTION 2 - INDIAN DIET PLAN:", "").replace("SECTION 2", "").strip()
-        else:
-            health_summary = full_response
-            diet_plan = ""
+            # Split reliably using the explicit token
+            if "[SPLIT_HERE]" in full_response:
+                summary, diet = full_response.split("[SPLIT_HERE]", 1)
+                st.session_state.health_summary = summary.replace("SECTION 1:", "").strip()
+                st.session_state.diet_plan = diet.replace("SECTION 2:", "").strip()
+            else:
+                st.session_state.health_summary = full_response
+                st.session_state.diet_plan = "Could not cleanly separate diet plan."
 
-        # Render into fixed-height scrollable boxes
-        health_box.markdown(
-            f'<div class="scroll-box">{health_summary}</div>',
-            unsafe_allow_html=True
-        )
-        diet_box.markdown(
-            f'<div class="scroll-box">{diet_plan if diet_plan else full_response}</div>',
-            unsafe_allow_html=True
-        )
+            st.rerun()
